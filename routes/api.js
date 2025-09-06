@@ -1,6 +1,6 @@
 const express = require('express');
 const { success, error } = require('../helpers/response');
-const { saveData, checkUserExists, updateAndGetUserDay, sendWhatsAppMessage } = require('../helpers/storage');
+const { saveData, checkUserExists, updateAndGetUserDay, sendWhatsAppMessage, checkAndUpdateReward } = require('../helpers/storage');
 
 const router = express.Router();
 
@@ -79,6 +79,44 @@ router.post('/check-and-send-day', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Check answer and update rewards
+router.post('/check-answer', async (req, res) => {
+  try {
+    const { number, day, answer } = req.body;
+    
+    // Validate input
+    if (!number || !day || !answer) {
+      return error(res, 'Number, day, and answer are required', 400);
+    }
+    
+    if (!['A', 'B', 'C', 'D'].includes(answer.toUpperCase())) {
+      return error(res, 'Answer must be A, B, C, or D', 400);
+    }
+    
+    // Check if day is valid (1-7)
+    const dayNum = parseInt(day);
+    if (isNaN(dayNum) || dayNum < 1 || dayNum > 7) {
+      return error(res, 'Day must be a number between 1 and 7', 400);
+    }
+    
+    // Process the answer and update rewards
+    const result = await checkAndUpdateReward(number, dayNum, answer.toUpperCase());
+    
+    // Send success response
+    success(res, 'Answer processed successfully', {
+      isCorrect: result.isCorrect,
+      correctAnswer: result.correctAnswer,
+      day: result.day,
+      reward: result.reward,
+      allRewards: result.allRewards
+    });
+    
+  } catch (err) {
+    console.error('Error checking answer:', err);
+    error(res, err.message || 'Failed to process answer', 500);
   }
 });
 

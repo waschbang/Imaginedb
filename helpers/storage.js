@@ -196,18 +196,26 @@ async function updateAndGetUserDay(phoneNumber) {
     const prizeColumn = 5; // column F (0-based index 5)
 
     // Get existing days as array of numbers
-    let existingDays = userRow[dayColumn]
-      ? userRow[dayColumn].split(',').map(d => parseInt(d.trim()))
-      : [];
-
+    let existingDays = [];
+    if (userRow[dayColumn] && userRow[dayColumn].trim() !== '') {
+      existingDays = userRow[dayColumn]
+        .split(',')
+        .map(d => parseInt(d.trim()))
+        .filter(d => !isNaN(d));
+    }
+    
+    console.log('Existing days:', existingDays);
+    
     // Find the next day (max + 1, or 1 if no days exist)
     const nextDay = existingDays.length > 0 ? Math.max(...existingDays) + 1 : 1;
-
+    console.log('Next day to add:', nextDay);
+    
     // Add the new day if it's not already there
     if (!existingDays.includes(nextDay)) {
       existingDays.push(nextDay);
       // Sort the days to keep them in order
       existingDays.sort((a, b) => a - b);
+      console.log('Updated days:', existingDays);
     }
 
     // Update days string back into sheet (convert numbers to strings)
@@ -222,7 +230,7 @@ async function updateAndGetUserDay(phoneNumber) {
 
     // Check if user has played all 7 days
     let prizeEligible = false;
-    if ([1,2,3,4,5,6,7].every(d => existingDays.includes(d.toString()))) {
+    if ([1,2,3,4,5,6,7].every(d => existingDays.includes(d))) {
       prizeEligible = true;
 
       // Update prize column F (Grand Prize Eligible)
@@ -249,6 +257,82 @@ async function updateAndGetUserDay(phoneNumber) {
   }
 }
 
+/**
+ * Checks if the answer is correct and updates the rewards
+ * @param {string} phoneNumber - User's phone number
+ * @param {number} day - Day number (1-7)
+ * @param {string} answer - User's answer (A, B, C, or D)
+ * @returns {Promise<Object>} Result of the operation
+ */
+async function checkAndUpdateReward(phoneNumber, day, answer) {
+  try {
+    const authClient = await auth.getClient();
+    
+    // 1. Get the correct answer from Answer tab
+    const answerResponse = await sheets.spreadsheets.values.get({
+      auth: authClient,
+      spreadsheetId: config.SPREADSHEET_ID,
+      range: 'Answer!A:B', // Column A: Day, Column B: Correct Answer
+    });
+    
+    // Find the correct answer for the day
+    const answerRows = answerResponse.data.values || [];
+    const answerRow = answerRows.find(row => parseInt(row[0]) === day);
+    
+    if (!answerRow || !answerRow[1]) {
+      throw new Error('Invalid day or answer not found');
+    }
+    
+    const correctAnswer = answerRow[1].trim().toUpperCase();
+    const isCorrect = answer.toUpperCase() === correctAnswer;
+    
+    // 2. Update the Rewards column in Data tab
+    const dataResponse = await sheets.spreadsheets.values.get({
+      auth: authClient,
+      spreadsheetId: config.SPREADSHEET_ID,
+      range: `${config.SHEET_NAME}!A:F`,
+    });
+    
+    const rows = dataResponse.data.values || [];
+    const userRowIndex = rows.findIndex((row, index) =>
+      index >= 0 &&
+      row.length > 1 &&
+      row[1].toString().trim() === phoneNumber.toString().trim()
+    );
+    
+    if (userRowIndex === -1) {
+      throw new Error('User not found');
+    }
+    
+    const rewardsColumn = 4; // Column E (0-based index 4)
+    const existingRewards = rows[userRowIndex][rewardsColumn] || '';
+    const newReward = `${day}${isCorrect ? 'W' : 'L'}`;
+    const updatedRewards = existingRewards 
+      ? `${existingRewards}, ${newReward}`
+      : newReward;
+    
+    // Update the sheet
+    await sheets.spreadsheets.values.update({
+      auth: authClient,
+      spreadsheetId: config.SPREADSHEET_ID,
+      range: `${config.SHEET_NAME}!E${userRowIndex + 1}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [[updatedRewards]] }
+    });
+    
+    return {
+      isCorrect,
+      correctAnswer,
+      day,
+      reward: newReward,
+      allRewards: updatedRewards
+    };
+    
+  } catch (error) {
+    console.error('Error in checkAndUpdateReward:', error);
+    throw error;
+  }
+}
 
 module.exports = { 
   saveData, 
@@ -256,5 +340,6 @@ module.exports = {
   triggerExternalApi,
   checkUserExists,
   updateAndGetUserDay,
+  checkAndUpdateReward,
   sendWhatsAppMessage
 };
