@@ -1,6 +1,6 @@
 const express = require('express');
 const { success, error } = require('../helpers/response');
-const { saveData, checkUserExists } = require('../helpers/storage');
+const { saveData, checkUserExists, updateAndGetUserDay, sendWhatsAppMessage } = require('../helpers/storage');
 
 const router = express.Router();
 
@@ -15,14 +15,18 @@ router.post('/check-user', async (req, res) => {
   try {
     const { number } = req.body;
     if (!number) {
-      return error(res, 'Phone number is required in the request body', 400);
+      return res.status(400).json({ error: 'Phone number is required' });
     }
     
     const exists = await checkUserExists(number);
-    success(res, 'User check completed', { exists: exists ? 'Y' : 'N' });
+    if (exists) {
+      return res.status(200).end(); // User exists
+    } else {
+      return res.status(404).end(); // User doesn't exist
+    }
   } catch (err) {
     console.error('Error checking user:', err);
-    error(res, 'Internal server error', 500);
+    res.status(500).end(); // Internal server error
   }
 });
 
@@ -43,5 +47,39 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
+
+// Check and send day number to user
+router.post('/check-and-send-day', async (req, res) => {
+  try {
+    const { number } = req.body;
+    if (!number) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    // Update user's day number in the sheet and get the latest day
+    const user = await updateAndGetUserDay(number);
+    const latestDay = user.days[user.days.length - 1]; // Get the most recent day
+    
+    // Send WhatsApp message with the latest day
+    await sendWhatsAppMessage(number, latestDay);
+    
+    // Return user data with the latest day
+    res.json({
+      success: true,
+      data: {
+        name: user.name,
+        number: user.number,
+        day: parseInt(latestDay),
+        prizeEligible: user.prizeEligible
+      }
+    });
+  } catch (err) {
+    console.error('Error in check-and-send-day:', err);
+    if (err.message === 'User not found') {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 module.exports = router;

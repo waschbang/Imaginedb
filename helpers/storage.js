@@ -10,6 +10,47 @@ const auth = new google.auth.GoogleAuth({
 });
 
 /**
+ * Sends WhatsApp message via AiSensy API
+ * @param {string} to - Phone number with country code
+ * @param {number} day - Day number to include in the message
+ */
+async function sendWhatsAppMessage(to, day) {
+  try {
+    const response = await axios.post(
+      'https://apis.aisensy.com/project-apis/v1/project/68778bfb52435a133a4b3039/messages',
+      {
+        to,
+        type: 'template',
+        template: {
+          language: { policy: 'deterministic', code: 'en' },
+          name: 'marketing_english_06_09_2025_3182111',
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: `${day}` },
+                { type: 'text', text: `${day}` }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-AiSensy-Project-API-Pwd': '56e47afac4e7fcbcf0806'
+        }
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('Error sending WhatsApp message:', error);
+    throw error;
+  }
+}
+
+/**
  * Saves data to Google Sheets
  * @param {Object} data - The data to save
  * @param {string} data.name - The name to save
@@ -99,6 +140,7 @@ async function checkUserExists(phoneNumber) {
   try {
     const authClient = await auth.getClient();
     
+    // Get all values from the sheet
     const response = await sheets.spreadsheets.values.get({
       auth: authClient,
       spreadsheetId: config.SPREADSHEET_ID,
@@ -122,9 +164,97 @@ async function checkUserExists(phoneNumber) {
   }
 }
 
+/**
+ * Gets and updates user's day number in Google Sheets
+ * @param {string} phoneNumber - The user's phone number
+ * @returns {Promise<{name: string, number: string, day: number}>} User data with updated day
+ */
+async function updateAndGetUserDay(phoneNumber) {
+  try {
+    const authClient = await auth.getClient();
+    const response = await sheets.spreadsheets.values.get({
+      auth: authClient,
+      spreadsheetId: config.SPREADSHEET_ID,
+      range: `${config.SHEET_NAME}!A:F`, // A: Name, B: Number, C: Start Date, D: Day, E: Rewards, F: Grand Prize
+    });
+
+    const rows = response.data.values || [];
+    const startRow = rows.length > 0 && rows[0].some(cell => 
+      cell.toString().toLowerCase().includes('number')
+    ) ? 1 : 0;
+
+    const userRowIndex = rows.findIndex((row, index) =>
+      index >= startRow &&
+      row.length > 1 &&
+      row[1].toString().trim() === phoneNumber.toString().trim()
+    );
+
+    if (userRowIndex === -1) throw new Error('User not found');
+
+    const userRow = rows[userRowIndex];
+    const dayColumn = 3; // column D (0-based index 3)
+    const prizeColumn = 5; // column F (0-based index 5)
+
+    // Get existing days as array of numbers
+    let existingDays = userRow[dayColumn]
+      ? userRow[dayColumn].split(',').map(d => parseInt(d.trim()))
+      : [];
+
+    // Find the next day (max + 1, or 1 if no days exist)
+    const nextDay = existingDays.length > 0 ? Math.max(...existingDays) + 1 : 1;
+
+    // Add the new day if it's not already there
+    if (!existingDays.includes(nextDay)) {
+      existingDays.push(nextDay);
+      // Sort the days to keep them in order
+      existingDays.sort((a, b) => a - b);
+    }
+
+    // Update days string back into sheet (convert numbers to strings)
+    const daysString = existingDays.join(', ');
+    await sheets.spreadsheets.values.update({
+      auth: authClient,
+      spreadsheetId: config.SPREADSHEET_ID,
+      range: `${config.SHEET_NAME}!D${userRowIndex + 1}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [[daysString]] }
+    });
+
+    // Check if user has played all 7 days
+    let prizeEligible = false;
+    if ([1,2,3,4,5,6,7].every(d => existingDays.includes(d.toString()))) {
+      prizeEligible = true;
+
+      // Update prize column F (Grand Prize Eligible)
+      await sheets.spreadsheets.values.update({
+        auth: authClient,
+        spreadsheetId: config.SPREADSHEET_ID,
+        range: `${config.SHEET_NAME}!F${userRowIndex + 1}`,
+        valueInputOption: 'USER_ENTERED',
+        resource: { values: [["Yes"]] }
+      });
+    }
+
+    return {
+      name: userRow[0],
+      number: userRow[1],
+      day: nextDay,  // Return the newly added day
+      days: existingDays,  // Return all days for reference
+      prizeEligible
+    };
+
+  } catch (error) {
+    console.error('Error updating user day:', error);
+    throw error;
+  }
+}
+
+
 module.exports = { 
   saveData, 
   saveToGoogleSheets, 
   triggerExternalApi,
-  checkUserExists
+  checkUserExists,
+  updateAndGetUserDay,
+  sendWhatsAppMessage
 };
